@@ -1,0 +1,10 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+	<PropertyGroup>
+		<LanguageVersion>Latest</LanguageVersion>
+		<Nullable>enable</Nullable>
+		<!-- https://github.com/dotnet/roslyn-analyzers -->
+		<EnableNETAnalyzers>true</EnableNETAnalyzers>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+		<NoWarn>$(NoWarn);1591;CA1416</NoWarn>
+	</PropertyGroup>
+</Project>
