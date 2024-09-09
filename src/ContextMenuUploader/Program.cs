@@ -6,73 +6,100 @@ namespace ContextMenuUploader;
 
 using System.Reflection;
 
-internal class Program
+public class Program
 {
-	private static void Main(string[] args)
+	private const string AppName = "ContextMenuUploader";
+	private const int BatchTimeoutMs = 1000; // Timeout in milliseconds to wait for more files to be selected
+	private const string ContextMenuLabel = "Upload to web service";
+	private const string MutexName = "Global\\ContextMenuUploader";
+	private static readonly string TempFilePath = Path.Combine(Path.GetTempPath(), "ContextMenuUploader.txt");
+
+	[STAThread]
+	public static async Task Main(string[] args)
 	{
-		const string appName = "ContextMenuUploader";
+		Application.SetHighDpiMode(HighDpiMode.SystemAware);
+		Application.EnableVisualStyles();
+		Application.SetCompatibleTextRenderingDefault(false);
+
 		string appPath = Assembly.GetExecutingAssembly().Location.Replace(".dll", ".exe");
 
 		switch (args.Length)
 		{
 			case > 0 when args[0] == "--register":
-				RegistryHelper.AddContextMenu(appName, appPath);
+				RegistryHelper.AddContextMenu(Program.AppName, appPath, Program.ContextMenuLabel);
 				return;
 			case > 0 when args[0] == "--unregister":
-				RegistryHelper.RemoveContextMenu(appName);
+				RegistryHelper.RemoveContextMenu(Program.AppName);
 				return;
 			case 0:
-				Console.WriteLine("USAGE:");
-				Console.WriteLine("  ContextMenuUploader --register      Register the context menu item for files and folders");
-				Console.WriteLine("  ContextMenuUploader --unregister    Unregister the context menu item for files and folders");
+				string helpText = "This is a context menu tool.\n\n" + "Register the context menu item for files and folders:\n" +
+					"  ContextMenuUploader --register\n\n" + "Unregister the context menu item for files and folders:\n" +
+					"  ContextMenuUploader --unregister";
+				MessageBox.Show(helpText, "Context Menu Uploader", MessageBoxButtons.OK, MessageBoxIcon.Error);
 				return;
 		}
 
-		string path = args[0];
-
-		if (File.Exists(path))
-		{
-			Program.WriteDebugMessage($"Uploading file: {path}");
-
-			// TODO: Handle the actual upload of a single file
-			////Uploader uploader = new Uploader();
-			////uploader.UploadFile(path).Wait();
-		}
-		else if (Directory.Exists(path))
-		{
-			Program.WriteDebugMessage($"Uploading folder: {path}");
-
-			// TODO: Handle the actual upload of all files in the folder
-			////foreach (string file in Directory.EnumerateFiles(path))
-			////{
-			////	Uploader uploader = new Uploader();
-			////	uploader.UploadFile(file).Wait();
-			////}
-		}
-		else
-		{
-			Program.WriteDebugMessage($"File/Folder does not exist: {path}");
-		}
+		await Program.HandleFileActionAsync(args);
 	}
 
-	private static void WriteDebugMessage(string message)
+	private static async Task HandleFileActionAsync(string[] newPaths)
 	{
-		const string debugFilePath = @"C:\temp";
-		const string debugFileName = "ContextMenuUploader.log";
+		// Add new paths to the temporary file
+		newPaths.SafelyWriteLinesToFile(Program.TempFilePath, false);
 
-		if (!Directory.Exists(debugFilePath))
+		using Mutex mutex = new(true, Program.MutexName, out bool createdNew);
+
+		if (createdNew)
 		{
-			return;
+			// This instance is the first one to run
+			try
+			{
+				// Waiting if more files/folders are selected
+				await Task.Delay(Program.BatchTimeoutMs);
+
+				int previousCount, nextCount = (await File.ReadAllLinesAsync(Program.TempFilePath)).Length;
+
+				// Wait until the number stops increasing
+				do
+				{
+					previousCount = nextCount;
+					await Task.Delay(Program.BatchTimeoutMs);
+					nextCount = (await File.ReadAllLinesAsync(Program.TempFilePath)).Length;
+				}
+				while (previousCount != nextCount);
+
+				List<string> allPaths = new();
+
+				// Get all paths from the temporary file
+				if (File.Exists(Program.TempFilePath))
+				{
+					allPaths = (await File.ReadAllLinesAsync(Program.TempFilePath)).ToList();
+					File.Delete(Program.TempFilePath);
+				}
+
+				int count = allPaths.Count;
+
+				if (count > 0)
+				{
+					string message = $"Sending {count} files/folders to web service.";
+
+					if (count <= 10)
+					{
+						message += "\n\n" + string.Join("\n", allPaths);
+					}
+
+					MessageBox.Show(message, "Context Menu Uploader", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+					// TODO: Handle the actual upload of all files/folders selected
+					////await SendFilePathsToApiAsync(allPaths);
+				}
+			}
+			finally
+			{
+				mutex.ReleaseMutex();
+			}
 		}
 
-		try
-		{
-			string debugFile = Path.Combine(debugFilePath, debugFileName);
-			File.AppendAllLines(debugFile, [$"{DateTime.Now:yyyy-MM-dd HH:mm:ss} -> {message}",]);
-		}
-		catch (IOException exception)
-		{
-			Console.WriteLine(exception);
-		}
+		// Another instance has the mutex and is already running, so we're done
 	}
 }

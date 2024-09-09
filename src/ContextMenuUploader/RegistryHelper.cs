@@ -8,19 +8,22 @@ using Microsoft.Win32;
 
 public static class RegistryHelper
 {
-	public static void AddContextMenu(string appName, string appPath)
+	public static void AddContextMenu(string appName, string appPath, string contextMenuLabel)
 	{
 		try
 		{
 			// Add context menu for files (*\shell)
 			string regFilePath = @"*\shell\" + appName;
-			RegistryHelper.CreateRegistryKey(regFilePath, appPath);
+			RegistryHelper.CreateRegistryKey(regFilePath, appPath, contextMenuLabel);
 
 			// Add context menu for folders (Directory\shell)
 			string regFolderPath = @"Directory\shell\" + appName;
-			RegistryHelper.CreateRegistryKey(regFolderPath, appPath);
+			RegistryHelper.CreateRegistryKey(regFolderPath, appPath, contextMenuLabel);
 
-			Console.WriteLine("Context menu option added for files and folders.");
+			// Set the MultipleInvokePromptMinimum value to 256
+			RegistryHelper.SetMultipleInvokeLimit(256);
+
+			Console.WriteLine("Context menu option added for up to 256 files and folders.");
 		}
 		catch (Exception ex)
 		{
@@ -40,6 +43,9 @@ public static class RegistryHelper
 			string regFolderPath = @"Directory\shell\" + appName;
 			Registry.ClassesRoot.DeleteSubKeyTree(regFolderPath, false);
 
+			// Reset the MultipleInvokePromptMinimum value to 15
+			RegistryHelper.SetMultipleInvokeLimit(15);
+
 			Console.WriteLine("Context menu option removed for files and folders.");
 		}
 		catch (Exception ex)
@@ -48,18 +54,31 @@ public static class RegistryHelper
 		}
 	}
 
-	private static void CreateRegistryKey(string regPath, string appPath)
+	public static void SetMultipleInvokeLimit(int limit)
 	{
-		using RegistryKey key = Registry.ClassesRoot.CreateSubKey(regPath);
-
-		// ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
-		if (key == null)
+		try
 		{
-			return;
-		}
+			// Open the registry key
+			using RegistryKey? key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer", true);
 
-		// The text to display in the context menu
-		key.SetValue(string.Empty, "Upload to web service");
+			// Set the "MultipleInvokePromptMinimum" value to the provided limit
+			key?.SetValue("MultipleInvokePromptMinimum", limit, RegistryValueKind.DWord);
+
+			Console.WriteLine($"Successfully set MultipleInvokePromptMinimum to {limit}");
+		}
+		catch (Exception ex)
+		{
+			Console.WriteLine($"Error setting registry value: {ex.Message}");
+		}
+	}
+
+	private static void CreateRegistryKey(string regPath, string appPath, string contextMenuLabel)
+	{
+		// Create or update the registry key
+		using RegistryKey key = Registry.ClassesRoot.OpenSubKey(regPath, true) ?? Registry.ClassesRoot.CreateSubKey(regPath);
+
+		// Set the context menu label
+		key.SetValue(string.Empty, contextMenuLabel);
 
 		// Add the icon
 		key.SetValue("Icon", $"{appPath},0");
