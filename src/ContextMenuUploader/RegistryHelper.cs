@@ -20,10 +20,10 @@ public static class RegistryHelper
 			string regFolderPath = @"Directory\shell\" + appName;
 			RegistryHelper.CreateRegistryKey(regFolderPath, appPath, contextMenuLabel);
 
-			// Set the MultipleInvokePromptMinimum value to 256
-			RegistryHelper.SetMultipleInvokeLimit(256);
+			// Set the MultipleInvokePromptMinimum value to 512
+			RegistryHelper.SetMultipleInvokeLimit(512);
 
-			Console.WriteLine("Context menu option added for up to 256 files and folders.");
+			Console.WriteLine("Context menu option added for up to 512 files and folders.");
 		}
 		catch (Exception ex)
 		{
@@ -43,8 +43,8 @@ public static class RegistryHelper
 			string regFolderPath = @"Directory\shell\" + appName;
 			Registry.ClassesRoot.DeleteSubKeyTree(regFolderPath, false);
 
-			// Reset the MultipleInvokePromptMinimum value to 15
-			RegistryHelper.SetMultipleInvokeLimit(15);
+			// Reset the MultipleInvokePromptMinimum value
+			RegistryHelper.SetMultipleInvokeLimit();
 
 			Console.WriteLine("Context menu option removed for files and folders.");
 		}
@@ -54,17 +54,27 @@ public static class RegistryHelper
 		}
 	}
 
-	public static void SetMultipleInvokeLimit(int limit)
+	public static void SetMultipleInvokeLimit(int? limit = null)
 	{
 		try
 		{
 			// Open the registry key
 			using RegistryKey? key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer", true);
 
-			// Set the "MultipleInvokePromptMinimum" value to the provided limit
-			key?.SetValue("MultipleInvokePromptMinimum", limit, RegistryValueKind.DWord);
+			if (limit.HasValue)
+			{
+				// Set the "MultipleInvokePromptMinimum" value to the provided limit
+				key?.SetValue("MultipleInvokePromptMinimum", limit, RegistryValueKind.DWord);
 
-			Console.WriteLine($"Successfully set MultipleInvokePromptMinimum to {limit}");
+				Console.WriteLine($"Successfully set MultipleInvokePromptMinimum to {limit}");
+			}
+			else
+			{
+				// Reset the "MultipleInvokePromptMinimum"
+				key?.DeleteValue("MultipleInvokePromptMinimum");
+
+				Console.WriteLine($"Successfully reset MultipleInvokePromptMinimum");
+			}
 		}
 		catch (Exception ex)
 		{

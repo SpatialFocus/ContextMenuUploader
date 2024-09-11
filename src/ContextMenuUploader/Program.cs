@@ -9,10 +9,10 @@ using System.Reflection;
 public class Program
 {
 	private const string AppName = "ContextMenuUploader";
-	private const int BatchTimeoutMs = 1000; // Timeout in milliseconds to wait for more files to be selected
+	private const int BatchTimeoutMs = 500; // Timeout in milliseconds to wait for more files to be selected
 	private const string ContextMenuLabel = "Upload to web service";
 	private const string MutexName = "Global\\ContextMenuUploader";
-	private static readonly string TempFilePath = Path.Combine(Path.GetTempPath(), "ContextMenuUploader.txt");
+	private static readonly string TempFilePath = Path.Combine(Path.GetTempPath(), "ContextMenuUploader");
 
 	[STAThread]
 	public static async Task Main(string[] args)
@@ -44,8 +44,12 @@ public class Program
 
 	private static async Task HandleFileActionAsync(string[] newPaths)
 	{
-		// Add new paths to the temporary file
-		newPaths.SafelyWriteLinesToFile(Program.TempFilePath, false);
+		// Ensure the temporary directory exists
+		Directory.CreateDirectory(Program.TempFilePath);
+
+		// Add new paths to a temporary file
+		string randomFile = Path.Combine(Program.TempFilePath, Path.GetRandomFileName());
+		await File.AppendAllLinesAsync(randomFile, newPaths);
 
 		using Mutex mutex = new(true, Program.MutexName, out bool createdNew);
 
@@ -57,24 +61,28 @@ public class Program
 				// Waiting if more files/folders are selected
 				await Task.Delay(Program.BatchTimeoutMs);
 
-				int previousCount, nextCount = (await File.ReadAllLinesAsync(Program.TempFilePath)).Length;
+				int previousCount, nextCount = Directory.GetFiles(Program.TempFilePath).Length;
 
 				// Wait until the number stops increasing
 				do
 				{
 					previousCount = nextCount;
 					await Task.Delay(Program.BatchTimeoutMs);
-					nextCount = (await File.ReadAllLinesAsync(Program.TempFilePath)).Length;
+					nextCount = Directory.GetFiles(Program.TempFilePath).Length;
 				}
 				while (previousCount != nextCount);
 
 				List<string> allPaths = new();
 
-				// Get all paths from the temporary file
-				if (File.Exists(Program.TempFilePath))
+				// Get all paths from the temporary files
+				if (Directory.Exists(Program.TempFilePath))
 				{
-					allPaths = (await File.ReadAllLinesAsync(Program.TempFilePath)).ToList();
-					File.Delete(Program.TempFilePath);
+					foreach (var file in Directory.GetFiles(Program.TempFilePath))
+					{
+						allPaths.AddRange(await File.ReadAllLinesAsync(file));
+					}
+
+					Directory.Delete(Program.TempFilePath, true);
 				}
 
 				int count = allPaths.Count;
