@@ -4,15 +4,16 @@
 
 namespace ContextMenuUploader;
 
-using System.Reflection;
+using System.Diagnostics;
+using System.Security.Principal;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 public class Program
 {
 	private const string AppName = "ContextMenuUploader";
-	private const int BatchTimeoutMs = 500; // Timeout in milliseconds to wait for more files to be selected
 	private const string ContextMenuLabel = "Upload to web service";
-	private const string MutexName = "Global\\ContextMenuUploader";
-	private static readonly string TempFilePath = Path.Combine(Path.GetTempPath(), "ContextMenuUploader");
 
 	[STAThread]
 	public static async Task Main(string[] args)
@@ -21,93 +22,98 @@ public class Program
 		Application.EnableVisualStyles();
 		Application.SetCompatibleTextRenderingDefault(false);
 
-		string appPath = Assembly.GetExecutingAssembly().Location.Replace(".dll", ".exe");
+		IHost host = Host.CreateDefaultBuilder(args)
+			.ConfigureServices((services, config) =>
+			{
+				config.Configure<ToolOptions>(services.Configuration.GetSection("Options"));
+				config.AddTransient<ContextMenuService>();
+				config.AddSingleton<RegistryService>();
+			})
+			.Build();
 
-		switch (args.Length)
+		ToolOptions toolOptions = host.Services.GetRequiredService<IOptions<ToolOptions>>().Value;
+		RegistryService registry = host.Services.GetRequiredService<RegistryService>();
+
+		if (args.Length == 0)
 		{
-			case > 0 when args[0] == "--register":
-				RegistryHelper.AddContextMenu(Program.AppName, appPath, Program.ContextMenuLabel);
-				return;
-			case > 0 when args[0] == "--unregister":
-				RegistryHelper.RemoveContextMenu(Program.AppName);
-				return;
-			case 0:
-				string helpText = "This is a context menu tool.\n\n" + "Register the context menu item for files and folders:\n" +
-					"  ContextMenuUploader --register\n\n" + "Unregister the context menu item for files and folders:\n" +
-					"  ContextMenuUploader --unregister";
-				MessageBox.Show(helpText, "Context Menu Uploader", MessageBoxButtons.OK, MessageBoxIcon.Error);
-				return;
+			if (registry.VerifyRegistration(Program.AppName))
+			{
+				if (MessageBox.Show("Do you want to remove the context menu entry?", "Context Menu Uploader", MessageBoxButtons.YesNo) ==
+					DialogResult.Yes)
+				{
+					Program.RegisterOrUnregister(registry, "--unregister");
+				}
+			}
+			else
+			{
+				if (MessageBox.Show("Do you want to register the context menu entry?", "Context Menu Uploader", MessageBoxButtons.YesNo) ==
+					DialogResult.Yes)
+				{
+					Program.RegisterOrUnregister(registry, "--register", toolOptions.MultipleInvokeLimit);
+				}
+			}
 		}
-
-		await Program.HandleFileActionAsync(args);
+		else if (args[0] == "--register" || args[0] == "--unregister")
+		{
+			Program.RegisterOrUnregister(registry, args[0], toolOptions.MultipleInvokeLimit);
+		}
+		else
+		{
+			ContextMenuService service = host.Services.GetRequiredService<ContextMenuService>();
+			await service.ExecuteAsync(args);
+		}
 	}
 
-	private static async Task HandleFileActionAsync(string[] newPaths)
+	private static bool IsUserAdministrator()
 	{
-		// Ensure the temporary directory exists
-		Directory.CreateDirectory(Program.TempFilePath);
+		using WindowsIdentity identity = WindowsIdentity.GetCurrent();
 
-		// Add new paths to a temporary file
-		string randomFile = Path.Combine(Program.TempFilePath, Path.GetRandomFileName());
-		await File.AppendAllLinesAsync(randomFile, newPaths);
+		WindowsPrincipal principal = new(identity);
+		return principal.IsInRole(WindowsBuiltInRole.Administrator);
+	}
 
-		using Mutex mutex = new(true, Program.MutexName, out bool createdNew);
-
-		if (createdNew)
+	private static void RegisterOrUnregister(RegistryService registry, string parameter, int multipleInvokeLimit = 0)
+	{
+		if (!Program.IsUserAdministrator())
 		{
-			// This instance is the first one to run
+			// Restart the application with administrative rights
+			ProcessStartInfo processInfo = new()
+			{
+				UseShellExecute = true, FileName = Application.ExecutablePath, Verb = "runas", Arguments = parameter,
+			};
+
 			try
 			{
-				// Waiting if more files/folders are selected
-				await Task.Delay(Program.BatchTimeoutMs);
-
-				int previousCount, nextCount = Directory.GetFiles(Program.TempFilePath).Length;
-
-				// Wait until the number stops increasing
-				do
-				{
-					previousCount = nextCount;
-					await Task.Delay(Program.BatchTimeoutMs);
-					nextCount = Directory.GetFiles(Program.TempFilePath).Length;
-				}
-				while (previousCount != nextCount);
-
-				List<string> allPaths = new();
-
-				// Get all paths from the temporary files
-				if (Directory.Exists(Program.TempFilePath))
-				{
-					foreach (var file in Directory.GetFiles(Program.TempFilePath))
-					{
-						allPaths.AddRange(await File.ReadAllLinesAsync(file));
-					}
-
-					Directory.Delete(Program.TempFilePath, true);
-				}
-
-				int count = allPaths.Count;
-
-				if (count > 0)
-				{
-					string message = $"Sending {count} files/folders to web service.";
-
-					if (count <= 10)
-					{
-						message += "\n\n" + string.Join("\n", allPaths);
-					}
-
-					MessageBox.Show(message, "Context Menu Uploader", MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-					// TODO: Handle the actual upload of all files/folders selected
-					////await SendFilePathsToApiAsync(allPaths);
-				}
+				Process.Start(processInfo);
 			}
-			finally
+			catch (Exception)
 			{
-				mutex.ReleaseMutex();
+				MessageBox.Show("Admin privileges are required to modify the registry.", "Context Menu Uploader", MessageBoxButtons.OK,
+					MessageBoxIcon.Error);
 			}
+
+			return;
 		}
 
-		// Another instance has the mutex and is already running, so we're done
+		if (parameter == "--register")
+		{
+			bool result = registry.AddContextMenu(Program.AppName, Application.ExecutablePath, Program.ContextMenuLabel,
+				multipleInvokeLimit);
+
+			if (result)
+			{
+				MessageBox.Show("Context menu entry was added.", "Context Menu Uploader", MessageBoxButtons.OK, MessageBoxIcon.Information);
+			}
+		}
+		else
+		{
+			bool result = registry.RemoveContextMenu(Program.AppName);
+
+			if (result)
+			{
+				MessageBox.Show("Context menu entry was removed.", "Context Menu Uploader", MessageBoxButtons.OK,
+					MessageBoxIcon.Information);
+			}
+		}
 	}
 }
